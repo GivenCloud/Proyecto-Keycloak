@@ -33,6 +33,10 @@ service:
 # PostgreSQL backend (recommended for production)
 postgresql:
   enabled: true
+  image:
+    registry: docker.io
+    repository: bitnami/postgresql
+    tag: "17.6.0"
   auth:
     username: keycloak
     database: keycloak
