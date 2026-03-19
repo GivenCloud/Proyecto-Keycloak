@@ -101,22 +101,20 @@ persistence:
 
 # Liveness and readiness probes
 livenessProbe:
-  httpGet:
-    path: /health/live
-    port: http
+  enabled: true
   initialDelaySeconds: 60
   periodSeconds: 10
   timeoutSeconds: 5
   failureThreshold: 3
+  successThreshold: 1
 
 readinessProbe:
-  httpGet:
-    path: /health/ready
-    port: http
+  enabled: true
   initialDelaySeconds: 30
   periodSeconds: 10
   timeoutSeconds: 5
   failureThreshold: 3
+  successThreshold: 1
 
 # Autoscaling (optional)
 autoscaling:
