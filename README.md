@@ -1,1 +1,4 @@
-# Proyecto-Keycloak
+- charts: Los charts que no puedo pillar directamente desde git/ helm
+- manifests: helmreleases.yaml de cada aplicacion los manifiestos de cada aplicacion
+- resources: Van los values.yaml que vamos a referenciar desde los helmreleases
+- revissions: Van las revisiones de argo de los stacks enteros de componentes y lo unico que tengo que aplicar

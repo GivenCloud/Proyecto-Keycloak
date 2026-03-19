@@ -1,0 +1,123 @@
+## Bitnami Keycloak Helm Chart Values
+## https://github.com/bitnami/charts/tree/main/bitnami/keycloak
+
+image:
+  registry: docker.io
+  repository: bitnami/keycloak
+  tag: 26.3.1-debian-12-r1
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+# Admin credentials
+auth:
+  adminUser: admin
+  adminPassword: changeme123!
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+  annotations: {}
+
+# Ingress configuration (optional, uncomment if needed)
+# ingress:
+#   enabled: true
+#   ingressClassName: nginx
+#   hostname: keycloak.example.com
+#   tls: true
+#   certManager: true
+
+# PostgreSQL backend (recommended for production)
+postgresql:
+  enabled: true
+  auth:
+    username: keycloak
+    password: keycloak123
+    database: keycloak
+  primary:
+    persistence:
+      enabled: true
+      size: 10Gi
+      storageClassName: standard
+
+# Keycloak configuration
+keycloak:
+  extraEnvVars:
+    - name: KC_DB
+      value: postgres
+    - name: KC_DB_URL_HOST
+      value: keycloak-postgresql
+    - name: KC_DB_URL_PORT
+      value: "5432"
+    - name: KC_DB_URL_DATABASE
+      value: keycloak
+    - name: KC_DB_USERNAME
+      value: keycloak
+    - name: KC_DB_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: keycloak-postgresql
+          key: password
+    - name: KC_PROXY
+      value: "edge"
+    - name: KC_HOSTNAME
+      value: "keycloak.local"
+    - name: KEYCLOAK_EXTRA_ARGS
+      value: "--import-realm"
+
+  # Mount ConfigCLI scripts
+  extraVolumes:
+    - name: realm-config
+      configMap:
+        name: keycloak-realm-config
+  
+  extraVolumeMounts:
+    - name: realm-config
+      mountPath: /opt/keycloak/data/import
+
+# Resource limits
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 250m
+    memory: 256Mi
+
+# Pod security context
+podSecurityContext:
+  fsGroup: 1001
+  runAsNonRoot: true
+  runAsUser: 1001
+
+# PVC for persistence
+persistence:
+  enabled: false  # Keycloak relies on PostgreSQL for data
+
+# Liveness and readiness probes
+livenessProbe:
+  httpGet:
+    path: /health/live
+    port: http
+  initialDelaySeconds: 60
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /health/ready
+    port: http
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# Autoscaling (optional)
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 80

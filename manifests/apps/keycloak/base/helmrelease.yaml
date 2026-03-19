@@ -1,0 +1,87 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: keycloak
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  sources:
+    # Source 1: Bitnami Keycloak Helm Chart
+    - repoURL: https://charts.bitnami.com/bitnami
+      chart: keycloak
+      targetRevision: "25.x.x"  # Latest 25 or 26 version
+      helm:
+        releaseName: keycloak
+        values: |
+          image:
+            registry: docker.io
+            repository: bitnami/keycloak
+            tag: 26.3.1-debian-12-r1
+          auth:
+            adminUser: admin
+            adminPassword: changeme123!
+          service:
+            type: ClusterIP
+            port: 80
+          postgresql:
+            enabled: true
+            auth:
+              username: keycloak
+              password: keycloak123
+              database: keycloak
+            primary:
+              persistence:
+                enabled: true
+                size: 10Gi
+          keycloak:
+            extraEnvVars:
+              - name: KC_DB
+                value: postgres
+              - name: KC_DB_URL_HOST
+                value: keycloak-postgresql
+              - name: KC_DB_URL_PORT
+                value: "5432"
+              - name: KC_DB_URL_DATABASE
+                value: keycloak
+              - name: KC_DB_USERNAME
+                value: keycloak
+              - name: KC_PROXY
+                value: "edge"
+              - name: KC_HOSTNAME
+                value: "keycloak.local"
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 250m
+              memory: 256Mi
+    
+    # Source 2: ConfigCLI Job and other manifests
+    - repoURL: https://github.com/GivenCloud/Proyecto-Keycloak.git
+      path: manifests/apps/keycloak
+      targetRevision: main
+    
+    # Source 3: Values reference
+    - repoURL: https://github.com/GivenCloud/Proyecto-Keycloak.git
+      targetRevision: main
+      ref: values
+  
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: keycloak
+  
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - ApplyOutOfSyncOnly=true
+      - RespectIgnoreDifferences=true
+      - Replace=false
+  
+  revisionHistoryLimit: 3

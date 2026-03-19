@@ -1,0 +1,260 @@
+---
+# ConfigMap with Keycloak realm configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-realm-config
+  namespace: keycloak
+  labels:
+    app: keycloak
+    component: config
+data:
+  demo-realm.json: |
+    {
+      "realm": "demo",
+      "displayName": "Demo Realm",
+      "enabled": true,
+      "sslRequired": "external",
+      "loginTheme": "keycloak",
+      "accountTheme": "keycloak",
+      "adminTheme": "keycloak",
+      "emailTheme": "keycloak",
+      "defaultRoles": [
+        "user",
+        "offline_access"
+      ],
+      "roles": {
+        "realm": [
+          {
+            "name": "admin",
+            "description": "Administrator role"
+          },
+          {
+            "name": "user",
+            "description": "Standard user role"
+          },
+          {
+            "name": "manager",
+            "description": "Manager role"
+          }
+        ]
+      },
+      "clients": [
+        {
+          "clientId": "demo-app",
+          "name": "Demo Application",
+          "enabled": true,
+          "publicClient": false,
+          "clientAuthenticatorType": "client-secret",
+          "secret": "demo-app-secret",
+          "redirectUris": [
+            "http://localhost:3000/*",
+            "http://localhost:8080/*"
+          ],
+          "webOrigins": [
+            "http://localhost:3000",
+            "http://localhost:8080"
+          ],
+          "roles": {
+            "client": [
+              {
+                "name": "read",
+                "description": "Read access"
+              },
+              {
+                "name": "write",
+                "description": "Write access"
+              },
+              {
+                "name": "delete",
+                "description": "Delete access"
+              }
+            ]
+          }
+        }
+      ],
+      "clientScopes": [
+        {
+          "name": "profile",
+          "description": "OpenID Connect built-in scope: profile",
+          "protocol": "openid-connect",
+          "attributes": {
+            "include.in.token.scope": "true",
+            "display.on.consent.screen": "true",
+            "consent.screen.text": "Profile"
+          },
+          "protocolMappers": [
+            {
+              "name": "name",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-userinfo-property-mapper",
+              "consentRequired": false,
+              "config": {
+                "userinfo.token.claim": "true",
+                "user.attribute": "name",
+                "id.token.claim": "true",
+                "access.token.claim": "true",
+                "claim.name": "name",
+                "jsonType.label": "String"
+              }
+            }
+          ]
+        },
+        {
+          "name": "roles",
+          "description": "Custom roles scope",
+          "protocol": "openid-connect",
+          "attributes": {
+            "include.in.token.scope": "false"
+          },
+          "protocolMappers": [
+            {
+              "name": "realm roles",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-userinfo-property-mapper",
+              "consentRequired": false,
+              "config": {
+                "userinfo.token.claim": "true",
+                "user.attribute": "groups",
+                "id.token.claim": "true",
+                "access.token.claim": "true",
+                "claim.name": "user_roles",
+                "jsonType.label": "String"
+              }
+            }
+          ]
+        }
+      ]
+    }
+
+---
+# Job to configure Keycloak via CLI
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: keycloak-configcli
+  namespace: keycloak
+  labels:
+    app: keycloak
+    component: config
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: keycloak
+        component: config
+    spec:
+      serviceAccountName: keycloak-configcli
+      restartPolicy: Never
+      initContainers:
+        # Wait for Keycloak to be ready
+        - name: wait-for-keycloak
+          image: curlimages/curl:7.85.0
+          command: ['sh', '-c']
+          args:
+            - |
+              until curl -f http://keycloak:80/health/ready > /dev/null 2>&1; do
+                echo "Waiting for Keycloak to be ready..."
+                sleep 5
+              done
+              echo "Keycloak is ready!"
+      containers:
+        - name: keycloak-cli
+          image: docker.io/bitnami/keycloak:26.3.1-debian-12-r1
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: KEYCLOAK_ADMIN
+              value: "admin"
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-admin-creds
+                  key: password
+                  optional: true
+            - name: KEYCLOAK_HOST
+              value: "http://keycloak:80"
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              echo "Starting Keycloak configuration..."
+              
+              # Export realm configuration
+              REALM_NAME="demo"
+              KC_ADMIN_URL="${KEYCLOAK_HOST:-http://keycloak:80}"
+              KC_USER="${KEYCLOAK_ADMIN:-admin}"
+              KC_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD:-changeme123!}"
+              
+              echo "Authenticating with Keycloak at $KC_ADMIN_URL..."
+              
+              # Get admin token
+              TOKEN=$(curl -s -X POST \
+                "${KC_ADMIN_URL}/realms/master/protocol/openid-connect/token" \
+                -d "client_id=admin-cli" \
+                -d "username=${KC_USER}" \
+                -d "password=${KC_PASSWORD}" \
+                -d "grant_type=password" | jq -r '.access_token')
+              
+              if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+                echo "Failed to authenticate with Keycloak"
+                exit 1
+              fi
+              
+              echo "Authentication successful!"
+              
+              # Check if realm already exists
+              REALM_EXISTS=$(curl -s -H "Authorization: Bearer $TOKEN" \
+                "${KC_ADMIN_URL}/admin/realms/${REALM_NAME}" -o /dev/null -w "%{http_code}")
+              
+              if [ "$REALM_EXISTS" = "200" ]; then
+                echo "Realm '${REALM_NAME}' already exists. Skipping creation."
+              else
+                echo "Creating realm '${REALM_NAME}'..."
+                curl -s -X POST \
+                  -H "Authorization: Bearer $TOKEN" \
+                  -H "Content-Type: application/json" \
+                  -d @/config/demo-realm.json \
+                  "${KC_ADMIN_URL}/admin/realms"
+                echo "Realm '${REALM_NAME}' created successfully!"
+              fi
+              
+              # Verify realm and roles
+              echo "Verifying configuration..."
+              curl -s -H "Authorization: Bearer $TOKEN" \
+                "${KC_ADMIN_URL}/admin/realms/${REALM_NAME}" | jq '.realm, .displayName'
+              
+              echo "Keycloak configuration completed successfully!"
+          volumeMounts:
+            - name: realm-config
+              mountPath: /config
+      volumes:
+        - name: realm-config
+          configMap:
+            name: keycloak-realm-config
+
+---
+# ServiceAccount for ConfigCLI Job
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: keycloak-configcli
+  namespace: keycloak
+  labels:
+    app: keycloak
+    component: config
+
+---
+# Secret with admin credentials (if not using existing)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: keycloak-admin-creds
+  namespace: keycloak
+  labels:
+    app: keycloak
+type: Opaque
+stringData:
+  password: "changeme123!"
