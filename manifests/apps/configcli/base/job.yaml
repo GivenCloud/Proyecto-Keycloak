@@ -14,8 +14,8 @@ metadata:
     argocd.argoproj.io/hook: PostSync
     # Ejecutar después del despliegue principal
     argocd.argoproj.io/sync-wave: "10"
-    # Gestionar ciclo de vida del hook para evitar estados colgados
-    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded,HookFailed
+    # Mantener el Job para revisar estado y logs (debug)
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
 spec:
   backoffLimit: 3
   ttlSecondsAfterFinished: 3600
