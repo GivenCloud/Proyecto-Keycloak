@@ -12,7 +12,8 @@ replicaCount: 1
 # Admin credentials
 auth:
   adminUser: admin
-  adminPassword: changeme123!
+  existingSecret: keycloak-helm-secrets
+  passwordSecretKey: admin-password
 
 # Service configuration
 service:
@@ -34,8 +35,10 @@ postgresql:
   enabled: true
   auth:
     username: keycloak
-    password: keycloak123
     database: keycloak
+    existingSecret: keycloak-helm-secrets
+    secretKeys:
+      userPasswordKey: password
   primary:
     persistence:
       enabled: true
@@ -58,7 +61,7 @@ keycloak:
     - name: KC_DB_PASSWORD
       valueFrom:
         secretKeyRef:
-          name: keycloak-postgresql
+          name: keycloak-helm-secrets
           key: password
     - name: KC_PROXY
       value: "edge"

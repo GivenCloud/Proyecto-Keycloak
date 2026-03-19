@@ -22,7 +22,12 @@ spec:
       path: manifests/apps/keycloak
       targetRevision: main
     
-    # Source 3: Values reference
+    # Source 3: Sealed secrets and extra manifests from resources
+    - repoURL: https://github.com/GivenCloud/Proyecto-Keycloak.git
+      path: resources/apps/keycloak/secrets
+      targetRevision: main
+
+    # Source 4: Values reference
     - repoURL: https://github.com/GivenCloud/Proyecto-Keycloak.git
       targetRevision: main
       ref: values
