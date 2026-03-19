@@ -12,8 +12,10 @@ metadata:
   annotations:
     # Hooks de ArgoCD: se ejecuta POST sincronización
     argocd.argoproj.io/hook: PostSync
-    # Eliminar el Job anterior antes de crear uno nuevo
-    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    # Ejecutar después del despliegue principal
+    argocd.argoproj.io/sync-wave: "10"
+    # Gestionar ciclo de vida del hook para evitar estados colgados
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded,HookFailed
 spec:
   backoffLimit: 3
   ttlSecondsAfterFinished: 3600
