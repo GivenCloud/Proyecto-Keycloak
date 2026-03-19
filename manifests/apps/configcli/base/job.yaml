@@ -67,72 +67,39 @@ spec:
             - -c
             - |
               set -e
-              echo "Starting Keycloak configuration..."
-              
-              REALM_NAME="demo"
               KC_ADMIN_URL="${KEYCLOAK_HOST:-http://keycloak:80}"
               KC_USER="${KEYCLOAK_ADMIN:-admin}"
               KC_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD:-changeme123!}"
-              
-              echo "Authenticating with Keycloak at $KC_ADMIN_URL..."
-              
+
               TOKEN=$(curl -s -X POST \
                 "${KC_ADMIN_URL}/realms/master/protocol/openid-connect/token" \
                 -d "client_id=admin-cli" \
                 -d "username=${KC_USER}" \
                 -d "password=${KC_PASSWORD}" \
                 -d "grant_type=password" | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
-              
-              if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
-                echo "Failed to authenticate with Keycloak"
-                exit 1
-              fi
-              
-              echo "Authentication successful!"
-              
-              REALM_EXISTS=$(curl -s -H "Authorization: Bearer $TOKEN" \
-                "${KC_ADMIN_URL}/admin/realms/${REALM_NAME}" -o /dev/null -w "%{http_code}")
 
-              if [ "$REALM_EXISTS" = "200" ]; then
-                echo "Realm '${REALM_NAME}' already exists. Updating configuration..."
-                UPDATE_CODE=$(curl -s -o /tmp/realm-update-response.json -w "%{http_code}" -X PUT \
-                  -H "Authorization: Bearer $TOKEN" \
-                  -H "Content-Type: application/json" \
-                  -d @/config/demo-realm.json \
-                  "${KC_ADMIN_URL}/admin/realms/${REALM_NAME}")
-                if [ "$UPDATE_CODE" != "204" ] && [ "$UPDATE_CODE" != "200" ]; then
-                  echo "Failed to update realm '${REALM_NAME}' (HTTP ${UPDATE_CODE})"
-                  cat /tmp/realm-update-response.json || true
-                  exit 1
-                fi
-              else
-                echo "Creating realm '${REALM_NAME}'..."
-                CREATE_CODE=$(curl -s -o /tmp/realm-create-response.json -w "%{http_code}" -X POST \
-                  -H "Authorization: Bearer $TOKEN" \
-                  -H "Content-Type: application/json" \
-                  -d @/config/demo-realm.json \
-                  "${KC_ADMIN_URL}/admin/realms")
-                if [ "$CREATE_CODE" != "201" ] && [ "$CREATE_CODE" != "409" ]; then
-                  echo "Failed to create realm '${REALM_NAME}' (HTTP ${CREATE_CODE})"
-                  cat /tmp/realm-create-response.json || true
-                  exit 1
-                fi
-                if [ "$CREATE_CODE" = "409" ]; then
-                  echo "Realm '${REALM_NAME}' already exists (HTTP 409). Continuing..."
-                else
-                  echo "Realm '${REALM_NAME}' created successfully!"
-                fi
+              [ -n "$TOKEN" ] || { echo "Failed to authenticate"; exit 1; }
+
+              REALM_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $TOKEN" \
+                "${KC_ADMIN_URL}/admin/realms/demo")
+              if [ "$REALM_CODE" = "200" ]; then
+                echo "Realm 'demo' already exists. Nothing to do."
+                exit 0
               fi
-              
-              echo "Verifying configuration..."
-              VERIFY_CODE=$(curl -s -H "Authorization: Bearer $TOKEN" \
-                "${KC_ADMIN_URL}/admin/realms/${REALM_NAME}" -o /dev/null -w "%{http_code}")
-              if [ "$VERIFY_CODE" != "200" ]; then
-                echo "Realm verification failed with HTTP ${VERIFY_CODE}"
+
+              CREATE_CODE=$(curl -s -o /tmp/realm-create-response.json -w "%{http_code}" -X POST \
+                -H "Authorization: Bearer $TOKEN" \
+                -H "Content-Type: application/json" \
+                -d @/config/demo-realm.json \
+                "${KC_ADMIN_URL}/admin/realms")
+
+              if [ "$CREATE_CODE" != "201" ] && [ "$CREATE_CODE" != "409" ]; then
+                echo "Failed to create realm demo (HTTP ${CREATE_CODE})"
+                cat /tmp/realm-create-response.json || true
                 exit 1
               fi
-              
-              echo "Keycloak configuration completed successfully!"
+
+              echo "Realm 'demo' ensured."
           
           volumeMounts:
             - name: realm-config
