@@ -36,7 +36,23 @@ data:
             "name": "manager",
             "description": "Manager role"
           }
-        ]
+        ],
+        "client": {
+          "demo-app": [
+            {
+              "name": "read",
+              "description": "Read access"
+            },
+            {
+              "name": "write",
+              "description": "Write access"
+            },
+            {
+              "name": "delete",
+              "description": "Delete access"
+            }
+          ]
+        }
       },
       "clients": [
         {
@@ -53,23 +69,7 @@ data:
           "webOrigins": [
             "http://localhost:3000",
             "http://localhost:8080"
-          ],
-          "roles": {
-            "client": [
-              {
-                "name": "read",
-                "description": "Read access"
-              },
-              {
-                "name": "write",
-                "description": "Write access"
-              },
-              {
-                "name": "delete",
-                "description": "Delete access"
-              }
-            ]
-          }
+          ]
         }
       ],
       "clientScopes": [

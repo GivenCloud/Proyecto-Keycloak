@@ -92,17 +92,36 @@ spec:
               
               REALM_EXISTS=$(curl -s -H "Authorization: Bearer $TOKEN" \
                 "${KC_ADMIN_URL}/admin/realms/${REALM_NAME}" -o /dev/null -w "%{http_code}")
-              
+
               if [ "$REALM_EXISTS" = "200" ]; then
-                echo "Realm '${REALM_NAME}' already exists. Skipping creation."
-              else
-                echo "Creating realm '${REALM_NAME}'..."
-                curl -s -X POST \
+                echo "Realm '${REALM_NAME}' already exists. Updating configuration..."
+                UPDATE_CODE=$(curl -s -o /tmp/realm-update-response.json -w "%{http_code}" -X PUT \
                   -H "Authorization: Bearer $TOKEN" \
                   -H "Content-Type: application/json" \
                   -d @/config/demo-realm.json \
-                  "${KC_ADMIN_URL}/admin/realms"
-                echo "Realm '${REALM_NAME}' created successfully!"
+                  "${KC_ADMIN_URL}/admin/realms/${REALM_NAME}")
+                if [ "$UPDATE_CODE" != "204" ] && [ "$UPDATE_CODE" != "200" ]; then
+                  echo "Failed to update realm '${REALM_NAME}' (HTTP ${UPDATE_CODE})"
+                  cat /tmp/realm-update-response.json || true
+                  exit 1
+                fi
+              else
+                echo "Creating realm '${REALM_NAME}'..."
+                CREATE_CODE=$(curl -s -o /tmp/realm-create-response.json -w "%{http_code}" -X POST \
+                  -H "Authorization: Bearer $TOKEN" \
+                  -H "Content-Type: application/json" \
+                  -d @/config/demo-realm.json \
+                  "${KC_ADMIN_URL}/admin/realms")
+                if [ "$CREATE_CODE" != "201" ] && [ "$CREATE_CODE" != "409" ]; then
+                  echo "Failed to create realm '${REALM_NAME}' (HTTP ${CREATE_CODE})"
+                  cat /tmp/realm-create-response.json || true
+                  exit 1
+                fi
+                if [ "$CREATE_CODE" = "409" ]; then
+                  echo "Realm '${REALM_NAME}' already exists (HTTP 409). Continuing..."
+                else
+                  echo "Realm '${REALM_NAME}' created successfully!"
+                fi
               fi
               
               echo "Verifying configuration..."
