@@ -17,6 +17,7 @@ metadata:
     # Mantener el Job para revisar estado y logs (debug)
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
 spec:
+  activeDeadlineSeconds: 600
   backoffLimit: 3
   ttlSecondsAfterFinished: 3600
   template:
@@ -33,7 +34,15 @@ spec:
           command: ['sh', '-c']
           args:
             - |
+              START_TIME=$(date +%s)
+              TIMEOUT_SECONDS=300
               until curl -f http://keycloak:80/realms/master > /dev/null 2>&1; do
+                NOW=$(date +%s)
+                ELAPSED=$((NOW - START_TIME))
+                if [ "$ELAPSED" -ge "$TIMEOUT_SECONDS" ]; then
+                  echo "Timeout waiting for Keycloak readiness after ${TIMEOUT_SECONDS}s"
+                  exit 1
+                fi
                 echo "Waiting for Keycloak to be ready..."
                 sleep 5
               done
