@@ -33,7 +33,7 @@ spec:
           command: ['sh', '-c']
           args:
             - |
-              until curl -f http://keycloak:80/health/ready > /dev/null 2>&1; do
+              until curl -f http://keycloak:80/realms/master > /dev/null 2>&1; do
                 echo "Waiting for Keycloak to be ready..."
                 sleep 5
               done
