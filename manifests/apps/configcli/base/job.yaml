@@ -72,7 +72,7 @@ spec:
                 -d "client_id=admin-cli" \
                 -d "username=${KC_USER}" \
                 -d "password=${KC_PASSWORD}" \
-                -d "grant_type=password" | jq -r '.access_token')
+                -d "grant_type=password" | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
               
               if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
                 echo "Failed to authenticate with Keycloak"
@@ -97,8 +97,12 @@ spec:
               fi
               
               echo "Verifying configuration..."
-              curl -s -H "Authorization: Bearer $TOKEN" \
-                "${KC_ADMIN_URL}/admin/realms/${REALM_NAME}" | jq '.realm, .displayName'
+              VERIFY_CODE=$(curl -s -H "Authorization: Bearer $TOKEN" \
+                "${KC_ADMIN_URL}/admin/realms/${REALM_NAME}" -o /dev/null -w "%{http_code}")
+              if [ "$VERIFY_CODE" != "200" ]; then
+                echo "Realm verification failed with HTTP ${VERIFY_CODE}"
+                exit 1
+              fi
               
               echo "Keycloak configuration completed successfully!"
           
