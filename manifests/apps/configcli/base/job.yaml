@@ -1,0 +1,115 @@
+# CronJob to configure Keycloak via CLI
+# Se ejecuta automáticamente cada hora y es idempotente (solo crea si no existe)
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: keycloak-configcli
+  namespace: keycloak
+  labels:
+    app: keycloak
+    component: config
+spec:
+  # Schedule en formato cron: "0 * * * *" = cada hora a los 0 minutos
+  # Otras opciones: "*/5 * * * *" = cada 5 min, "0 */6 * * *" = cada 6 horas
+  schedule: "0 * * * *"
+  
+  # Historial: mantener 3 ejecuciones exitosas, 1 fallida
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  
+  # Definición del Job que se ejecutará
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      ttlSecondsAfterFinished: 3600
+      template:
+        metadata:
+          labels:
+            app: keycloak
+            component: config
+        spec:
+          serviceAccountName: keycloak-configcli
+          restartPolicy: Never
+          initContainers:
+            - name: wait-for-keycloak
+              image: curlimages/curl:7.85.0
+              command: ['sh', '-c']
+              args:
+                - |
+                  until curl -f http://keycloak:80/health/ready > /dev/null 2>&1; do
+                    echo "Waiting for Keycloak to be ready..."
+                    sleep 5
+                  done
+                  echo "Keycloak is ready!"
+          containers:
+            - name: keycloak-cli
+              image: docker.io/bitnami/keycloak:26.3.1-debian-12-r1
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: KEYCLOAK_ADMIN
+                  value: "admin"
+                - name: KEYCLOAK_ADMIN_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: keycloak-admin-creds
+                      key: password
+                      optional: true
+                - name: KEYCLOAK_HOST
+                  value: "http://keycloak:80"
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  set -e
+                  echo "Starting Keycloak configuration..."
+                  
+                  REALM_NAME="demo"
+                  KC_ADMIN_URL="${KEYCLOAK_HOST:-http://keycloak:80}"
+                  KC_USER="${KEYCLOAK_ADMIN:-admin}"
+                  KC_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD:-changeme123!}"
+                  
+                  echo "Authenticating with Keycloak at $KC_ADMIN_URL..."
+                  
+                  TOKEN=$(curl -s -X POST \
+                    "${KC_ADMIN_URL}/realms/master/protocol/openid-connect/token" \
+                    -d "client_id=admin-cli" \
+                    -d "username=${KC_USER}" \
+                    -d "password=${KC_PASSWORD}" \
+                    -d "grant_type=password" | jq -r '.access_token')
+                  
+                  if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+                    echo "Failed to authenticate with Keycloak"
+                    exit 1
+                  fi
+                  
+                  echo "Authentication successful!"
+                  
+                  REALM_EXISTS=$(curl -s -H "Authorization: Bearer $TOKEN" \
+                    "${KC_ADMIN_URL}/admin/realms/${REALM_NAME}" -o /dev/null -w "%{http_code}")
+                  
+                  if [ "$REALM_EXISTS" = "200" ]; then
+                    echo "Realm '${REALM_NAME}' already exists. Skipping creation."
+                  else
+                    echo "Creating realm '${REALM_NAME}'..."
+                    curl -s -X POST \
+                      -H "Authorization: Bearer $TOKEN" \
+                      -H "Content-Type: application/json" \
+                      -d @/config/demo-realm.json \
+                      "${KC_ADMIN_URL}/admin/realms"
+                    echo "Realm '${REALM_NAME}' created successfully!"
+                  fi
+                  
+                  echo "Verifying configuration..."
+                  curl -s -H "Authorization: Bearer $TOKEN" \
+                    "${KC_ADMIN_URL}/admin/realms/${REALM_NAME}" | jq '.realm, .displayName'
+                  
+                  echo "Keycloak configuration completed successfully!"
+              
+              volumeMounts:
+                - name: realm-config
+                  mountPath: /config
+          
+          volumes:
+            - name: realm-config
+              configMap:
+                name: keycloak-realm-config
