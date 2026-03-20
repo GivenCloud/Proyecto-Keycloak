@@ -1,102 +1,266 @@
-# Proyecto Keycloak (GitOps con ArgoCD + Kustomize)
+# Proyecto Keycloak (GitOps con ArgoCD + Helm)
 
-Este repositorio despliega Keycloak en Kubernetes (minikube en entorno local) usando GitOps con ArgoCD.
+Este repositorio despliega Keycloak en Kubernetes (minikube en entorno local) usando GitOps con ArgoCD y el Helm Chart v25.2.0 de Bitnami.
 
 ## Objetivo
 
-- Desplegar Keycloak con chart de Bitnami (sin valores embebidos en el `Application`).
-- Bootstrap inicial de configuración del realm `demo` mediante un `Job` PostSync.
-- Gestionar secretos sin texto plano usando Sealed Secrets.
-- Mantener una estructura simple y mantenible.
+- Desplegar Keycloak con Helm Chart de Bitnami (25.2.0).
+- Bootstrap automático de realm `demo` mediante `keycloakConfigCli` (hook PostSync del chart).
+- Gestionar secretos sin texto plano en git usando Sealed Secrets.
+- Mantener configuración versionada en git (valores Helm y manifiestos).
+- Infraestructura reproducible: desplegar en cualquier cluster con SealedSecrets Controller.
 
 ## Estructura del repositorio
 
 ```text
-charts/
 manifests/
-	apps/
-		__overlays/
-		keycloak/
-			base/
-			lab/
-		configcli/
-			base/
-			lab/
+  apps/
+    __overlays/
+      kustomization.yaml          # Orquestador: incluye keycloak/lab
+    keycloak/
+      base/
+        helmrelease.yaml          # Application ArgoCD (3 sources)
+      lab/
+        kustomization.yaml
 resources/
-	apps/
-		keycloak/
-			values.yaml
-			secrets/
+  apps/
+    keycloak/
+      values.yaml                 # Configuración Helm: realm, env, images
+      secrets/
+        keycloak-helm-sealedsecret.yaml  # Credenciales encriptadas
 revissions/
-	apps-revission.yaml
+  apps-revission.yaml             # App raíz (app-of-apps)
 ```
 
-- `manifests/`: manifiestos Kubernetes y apps ArgoCD.
-- `resources/`: valores Helm y recursos complementarios reutilizados por ArgoCD.
-- `revissions/`: manifiesto raíz (`apps-keycloak`) que se aplica para arrancar todo el stack.
+- **`manifests/`**: Applications ArgoCD y Kustomize overlays.
+- **`resources/`**: Valores Helm, secretos encriptados, configuración compartida.
+- **`revissions/`**: Manifiesto raíz (`apps-keycloak`), punto de entrada del despliegue.
 
 ## Arquitectura GitOps
 
 ### 1) App raíz (app-of-apps)
 
-Archivo: `revissions/apps-revission.yaml`
+**Archivo**: `revissions/apps-revission.yaml`
 
-- Crea el `Application` `apps-keycloak` en namespace `argocd`.
-- Fuente: `manifests/apps/__overlays`.
-- `syncPolicy.automated` activa `prune` y `selfHeal`.
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: apps-keycloak
+  namespace: argocd
+spec:
+  source:
+    repoURL: <tu-repo>
+    path: manifests/apps/__overlays
+    targetRevision: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+```
 
-### 2) Overlay de apps
+- Punto de entrada único del stack.
+- Referencia overlay raíz que orquesta todas las apps hijas.
+- `syncPolicy.automated` con `prune` y `selfHeal` habilitados.
 
-Archivo: `manifests/apps/__overlays/kustomization.yaml`
+### 2) Overlay raíz
 
-- Incluye:
-	- `../keycloak/lab`
-	- `../configcli/lab`
+**Archivo**: `manifests/apps/__overlays/kustomization.yaml`
 
-### 3) App hija de Keycloak
+```yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../keycloak/lab
+```
 
-Archivo: `manifests/apps/keycloak/base/helmrelease.yaml`
+- Agrupa todas las aplicaciones Keycloak.
+- Referencia solo `keycloak/lab` (el configcli está ahora dentro del chart).
 
-- `Application` ArgoCD con `sources` múltiples:
-	- Chart remoto `bitnami/keycloak`.
-	- Manifiestos del repo (`manifests/apps/keycloak`).
-	- Sealed Secrets de Helm (`resources/apps/keycloak/secrets`).
-	- Referencia `ref: values` para consumir `resources/apps/keycloak/values.yaml`.
+### 3) App Keycloak (multi-source)
 
-## Configuración de Keycloak (Helm)
+**Archivo**: `manifests/apps/keycloak/base/helmrelease.yaml`
 
-Archivo: `resources/apps/keycloak/values.yaml`
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: keycloak
+  namespace: argocd
+spec:
+  sources:
+    # Source 1: Bitnami Helm Chart
+    - repoURL: https://charts.bitnami.com/bitnami
+      chart: keycloak
+      targetRevision: "25.2.0"
+      helm:
+        releaseName: keycloak
+        valueFiles:
+          - $values/resources/apps/keycloak/values.yaml
+    
+    # Source 2: Sealed Secrets (credenciales encriptadas)
+    - repoURL: <tu-repo>
+      path: resources/apps/keycloak/secrets
+      targetRevision: main
 
-Puntos relevantes:
+    # Source 3: Valores Helm
+    - repoURL: <tu-repo>
+      targetRevision: main
+      ref: values
 
-- Imagen Keycloak: `docker.io/bitnamilegacy/keycloak:26.3.3-debian-12-r0`.
-- PostgreSQL embebido del chart con imagen `bitnamilegacy/postgresql`.
-- Credenciales por `existingSecret: keycloak-helm-secrets`.
-- Service `ClusterIP` en puerto `80`.
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: keycloak
+  
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+```
 
-Nota:
+**Flujo de sincronización**:
+1. ArgoCD descarga Chart v25.2.0 desde Bitnami.
+2. Merge de valores: `values.yaml` del chart + `resources/apps/keycloak/values.yaml`.
+3. Aplica `resources/apps/keycloak/secrets/keycloak-helm-sealedsecret.yaml`.
+4. SealedSecrets Controller desencripta → crea Secret nativo `keycloak-helm-secrets`.
+5. Helm instala release con todas las variables interpoladas.
+6. PostSync hook: `keycloakConfigCli` crea realm `demo` si no existe (idempotente).
 
-- Se migró a `bitnamilegacy/*` por errores de `manifest unknown` en imágenes/tags originales.
+## Configuración de Keycloak (Helm Chart v25.2.0)
 
-## App configcli (bootstrap del realm)
+**Archivo**: `resources/apps/keycloak/values.yaml`
 
-### Recursos base
+### Imágenes
 
-Carpeta: `manifests/apps/configcli/base/`
+```yaml
+image:
+  registry: bitnamilegacy
+  repository: keycloak
+  tag: 26.3.3-debian-12-r0
 
-- `configmap.yaml`: contiene `demo-realm.json` (realm, roles, cliente `demo-app`).
-- `job.yaml`: Job PostSync que crea el realm si no existe.
-- `serviceaccount.yaml`: SA dedicada `keycloak-configcli`.
-- `secret.yaml`: `SealedSecret` de credenciales admin para el job.
+postgresql:
+  image:
+    registry: bitnamilegacy
+    repository: postgresql
+    tag: 17.6.0-debian-12-r0
 
-### Comportamiento actual del Job
+keycloakConfigCli:
+  image:
+    registry: bitnamilegacy
+    repository: keycloak-config-cli
+    tag: 6.4.0-debian-12-r11
+```
 
-Archivo: `manifests/apps/configcli/base/job.yaml`
+**Nota**: Todas las imágenes usan registry `bitnamilegacy/` (las imágenes en `bitnami/` tienen issues de manifest unknown en algunos tags).
 
-- Espera a Keycloak con un `initContainer` (`/realms/master`) y timeout explícito.
-- Se autentica contra `master`.
-- Si `demo` existe: termina en éxito con mensaje `Nothing to do`.
-- Si `demo` no existe: crea el realm con `demo-realm.json`.
+### Credenciales (Sealed Secrets)
+
+```yaml
+auth:
+  adminPassword: ""  # Inyectado desde keycloak-helm-secrets
+  existingSecret: keycloak-helm-secrets
+
+postgresql:
+  auth:
+    password: ""  # Inyectado desde keycloak-helm-secrets
+    existingSecret: keycloak-helm-secrets
+```
+
+**Flujo**:
+1. `resources/apps/keycloak/secrets/keycloak-helm-sealedsecret.yaml` contiene credenciales encriptadas.
+2. SealedSecrets Controller desencripta → crea Secret `keycloak-helm-secrets` en namespace `keycloak`.
+3. Helm chart referencia ese Secret existente (no crea uno nuevo).
+4. Las credenciales se inyectan en las variables de entorno del Pod.
+
+### Variables de entorno (Keycloak ↔ PostgreSQL)
+
+```yaml
+keycloak:
+  extraEnvVars:
+    - name: KC_DB
+      value: postgres
+    - name: KC_DB_URL_HOST
+      value: keycloak-postgresql
+    - name: KC_DB_URL_PORT
+      value: "5432"
+    - name: KC_DB_URL_DATABASE
+      value: keycloak
+    - name: KC_DB_USERNAME
+      value: keycloak
+    - name: KC_DB_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: keycloak-helm-secrets
+          key: password
+    - name: KC_PROXY
+      value: edge
+    - name: KC_HOSTNAME
+      value: keycloak.local
+```
+
+**Explicación**:
+- `KC_DB`: Driver de base de datos (postgres).
+- `KC_DB_URL_*`: Conexión a PostgreSQL (hostname, puerto, BD).
+- `KC_DB_USERNAME/PASSWORD`: Credenciales de BD.
+- `KC_PROXY`: Confía en headers de reverse proxy (X-Forwarded-*).
+- `KC_HOSTNAME`: Hostname usado en redirect URIs y token audience.
+
+### Configuración inicial del realm (keycloakConfigCli)
+
+```yaml
+keycloakConfigCli:
+  enabled: true
+  containerSecurityContext:
+    runAsUser: 1001
+  
+  configuration:
+    demo-realm.json: |
+      {
+        "realm": "demo",
+        "enabled": true,
+        "clients": [
+          {
+            "clientId": "demo-app",
+            "name": "Demo App",
+            "rootUrl": "http://localhost:8080",
+            "redirectUris": ["http://localhost:8080/*"],
+            "webOrigins": ["*"]
+          }
+        ],
+        "roles": {
+          "realm": [
+            {"name": "admin"},
+            {"name": "user"},
+            {"name": "manager"}
+          ]
+        },
+        "clientScopes": [
+          {
+            "name": "demo-scope",
+            "description": "Demo scope"
+          }
+        ],
+        "defaultClientScopes": ["demo-scope"]
+      }
+```
+
+**Comportamiento**:
+- Hook PostSync del chart ejecuta `keycloak-config-cli`.
+- Lee configuración de `demo-realm.json`.
+- Crea realm `demo` si no existe (idempotente, no falla si existe).
+- Scope es: crear/actualizar realm, clientes, roles, scopes.
+
+**Ventajas vs Job manual**:
+- ✅ Incluido en el chart (menos manifiestos).
+- ✅ Automático con el Helm release.
+- ✅ Idempotente (seguro para re-syncs).
+- ✅ Versionado con el chart.
 
 Importante:
 
@@ -105,153 +269,276 @@ Importante:
 
 ## Seguridad de secretos
 
-Objetivo: no guardar passwords en texto plano en git.
+**Objetivo**: no guardar passwords en texto plano en git.
 
-Se usan dos secretos sellados:
+### Enfoque: Sealed Secrets + SealedSecret Controller
 
-- `manifests/apps/configcli/base/secret.yaml` (`keycloak-admin-creds`)
-- `resources/apps/keycloak/secrets/keycloak-helm-sealedsecret.yaml` (`keycloak-helm-secrets`)
+1. **Git**: `keycloak-helm-sealedsecret.yaml` contiene credenciales **encriptadas**.
+2. **Cluster**: SealedSecrets Controller desencripta automáticamente.
+3. **Runtime**: Secret de Kubernetes se inyecta en los Pods.
 
-## Sealed Secrets (Minikube + ArgoCD)
+**Ventaja**: Puedes hacer `git clone` y deployar sin miedo. Las credenciales solo son útiles con la **clave privada del cluster**.
 
-### 1) Instalar controller
+```
+git (encriptado)
+    ↓ [ArgoCD sync]
+cluster
+    ↓ [SealedSecrets Controller desencripta]
+Secret nativo (base64 en etcd)
+    ↓ [Inyectado en Pod]
+variable de entorno / archivo
+```
+
+### Instalación (una sola vez por cluster)
 
 ```bash
+# 1. Instalar Sealed Secrets Controller
 kubectl apply -f https://github.com/bitnami-labs/sealed-secrets/releases/download/v0.27.2/controller.yaml
 kubectl -n kube-system rollout status deploy/sealed-secrets-controller --timeout=180s
-```
 
-### 2) Instalar `kubeseal`
-
-```bash
-set -e
-ARCH=$(uname -m)
-case "$ARCH" in
-	x86_64) ARCH=amd64 ;;
-	aarch64) ARCH=arm64 ;;
-	*) echo "Arquitectura no soportada: $ARCH"; exit 1 ;;
-esac
-
+# 2. Instalar el cliente kubeseal
 VER=0.27.2
-curl -fL "https://github.com/bitnami-labs/sealed-secrets/releases/download/v${VER}/kubeseal-${VER}-linux-${ARCH}.tar.gz" -o /tmp/kubeseal.tgz
-tar -xzf /tmp/kubeseal.tgz -C /tmp
+ARCH=$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')
+curl -fL "https://github.com/bitnami-labs/sealed-secrets/releases/download/v${VER}/kubeseal-${VER}-linux-${ARCH}.tar.gz" | tar -xz -C /tmp
 sudo install -m 0755 /tmp/kubeseal /usr/local/bin/kubeseal
-kubeseal --version
 ```
 
-### 3) Crear/update de secreto sellado (ejemplo)
+### Crear/actualizar un Sealed Secret
 
 ```bash
-kubectl create secret generic keycloak-admin-creds \
-	--namespace keycloak \
-	--from-literal=password='CAMBIA_ESTE_VALOR' \
-	--dry-run=client -o yaml \
+# Crear un Secret plaintext
+kubectl create secret generic keycloak-helm-secrets \
+  --namespace keycloak \
+  --from-literal=admin-password='changeme' \
+  --from-literal=password='keycloak123' \
+  --from-literal=postgres-password='keycloak123' \
+  --dry-run=client -o yaml \
 | kubeseal \
-	--controller-name sealed-secrets-controller \
-	--controller-namespace kube-system \
-	--format yaml \
-> manifests/apps/configcli/base/secret.yaml
+  --controller-name sealed-secrets-controller \
+  --controller-namespace kube-system \
+  --format yaml \
+> resources/apps/keycloak/secrets/keycloak-helm-sealedsecret.yaml
+
+# Commitear a git (está encriptado)
+git add resources/apps/keycloak/secrets/keycloak-helm-sealedsecret.yaml
+git commit -m "Update sealed secrets"
 ```
 
-## Flujo de despliegue
+## Despliegue
 
-### Aplicar stack completo
+### 1) Requisitos previos
+
+- Kubernetes cluster (minikube, EKS, GKE, etc.)
+- ArgoCD instalado
+- Sealed Secrets Controller instalado
+- `kubectl` y `kubeseal` configurados
+
+### 2) Desplegar stack completo
 
 ```bash
+# Clonar repo
+git clone https://github.com/GivenCloud/Proyecto-Keycloak.git
+cd Proyecto-Keycloak
+
+# Aplicar app raíz (inicia sincronización)
 kubectl apply -f revissions/apps-revission.yaml
+
+# Ver progreso
+watch kubectl -n argocd get application
 ```
 
-### Ver estado ArgoCD
+### 3) Ver estado
 
 ```bash
-kubectl -n argocd get applications
-kubectl -n argocd get application apps-keycloak -o jsonpath='{.status.sync.status}{"\n"}{.status.health.status}{"\n"}'
-```
+# Apps ArgoCD
+kubectl -n argocd get applications -o wide
 
-### Ver estado de Keycloak
+# Pods Keycloak
+kubectl -n keycloak get pods -w
 
-```bash
-kubectl -n keycloak get pods
+# Servicios
 kubectl -n keycloak get svc
+
+# Secrets
+kubectl -n keycloak get secrets
 ```
 
-### Ver estado del job de bootstrap
+### 4) Verificar desencriptación de secretos
 
 ```bash
-kubectl -n keycloak get job keycloak-configcli
-kubectl -n keycloak logs job/keycloak-configcli --all-containers=true
+# Ver Secret desencriptado (base64)
+kubectl -n keycloak get secret keycloak-helm-secrets -o yaml
+
+# Decodificar una contraseña
+kubectl -n keycloak get secret keycloak-helm-secrets \
+  -o jsonpath='{.data.password}' | base64 -d && echo ""
 ```
 
 ## Validación funcional
 
-Comprobar realm/roles/client por API desde el pod de Keycloak:
+### 1) Verificar que Keycloak está respondiendo
 
 ```bash
-kubectl -n keycloak exec keycloak-0 -- sh -lc '
-TOKEN=$(curl -s -X POST http://localhost:8080/realms/master/protocol/openid-connect/token \
-	-d client_id=admin-cli -d username=admin \
-	-d password=$(cat /opt/bitnami/keycloak/secrets/admin-password) \
-	-d grant_type=password | sed -n "s/.*\"access_token\":\"\([^\"]*\)\".*/\1/p")
+# Port-forward
+kubectl -n keycloak port-forward svc/keycloak 8080:80 &
 
-echo "realm demo:" $(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $TOKEN" http://localhost:8080/admin/realms/demo)
-for r in admin user manager; do
-	echo "role $r:" $(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $TOKEN" http://localhost:8080/admin/realms/demo/roles/$r)
-done
-echo "client demo-app bytes:" $(curl -s -H "Authorization: Bearer $TOKEN" "http://localhost:8080/admin/realms/demo/clients?clientId=demo-app" | wc -c)
-'
+# Probar conexión
+curl -s http://localhost:8080/realms/master/.well-known/openid-configuration | jq .issuer
 ```
 
-## Troubleshooting aplicado en este proyecto
+### 2) Verificar realm demo creado
 
-### `kustomize create --autodetect --recursive` no hacía cambios
+```bash
+# Obtener token de admin
+TOKEN=$(kubectl -n keycloak exec keycloak-0 -- sh -c '
+  curl -s -X POST http://localhost:8080/realms/master/protocol/openid-connect/token \
+    -d client_id=admin-cli \
+    -d username=admin \
+    -d "password=$(cat /opt/bitnami/keycloak/secrets/admin-password)" \
+    -d grant_type=password \
+  | grep -o "access_token\":\"[^\"]*" | cut -d'"' -f3
+')
 
-- Causa: no modifica `kustomization.yaml` existentes y/o no detecta manifiestos en paths esperados.
-- Solución: definir `kustomization.yaml` explícitos por base/lab/overlay.
+# Verificar realm existe
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8080/admin/realms/demo | jq .realm
 
-### `ImagePullBackOff` en Keycloak/PostgreSQL
+# Verificar client existe
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8080/admin/realms/demo/clients?clientId=demo-app" | jq .[0].clientId
 
-- Causa: tags no disponibles en repo original.
-- Solución: usar imágenes `bitnamilegacy/*` con tags validados.
+# Verificar roles
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8080/admin/realms/demo/roles | jq '.[].name'
+```
 
-### Sync bloqueado en ArgoCD (`another operation is already in progress`)
+### 3) Verificar PostgreSQL
 
-- Causa: operación fantasma esperando hook que ya no existía.
-- Solución operativa usada:
-	- `kubectl -n argocd delete application apps-keycloak --cascade=orphan`
-	- `kubectl -n argocd apply -f revissions/apps-revission.yaml`
+```bash
+# Conectar a la BD
+PG_PASS=$(kubectl -n keycloak get secret keycloak-helm-secrets \
+  -o jsonpath='{.data.password}' | base64 -d)
 
-### Job atascado esperando readiness
+kubectl -n keycloak exec keycloak-postgresql-0 -- \
+  env PGPASSWORD="$PG_PASS" psql -U keycloak -d keycloak \
+  -c "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'public';"
 
-- Causa: endpoint `/health/ready` devolvía 404 en este despliegue.
-- Solución: esperar sobre `/realms/master`.
+# Resultado: public (significa que Keycloak inicializó la BD correctamente)
+```
 
-### `jq: command not found` en el Job
+## Troubleshooting
 
-- Solución: parseo de token sin dependencia de `jq`.
+### Imagen `ImagePullBackOff`
 
-### Complejidad excesiva del script
+**Síntoma**: Pod en `ImagePullBackOff`.
 
-- Decisión final: simplificar a bootstrap mínimo y estable.
+**Causa**: Las imágenes en `bitnami/` no existen con esos tags (manifest unknown error).
 
-## Estado actual y limitaciones
+**Solución**: Usar `bitnamilegacy/` en lugar de `bitnami/`.
 
-Estado actual:
+```yaml
+# ✅ Correcto
+image:
+  registry: bitnamilegacy
 
-- `apps-keycloak` sincroniza correctamente.
-- Keycloak y PostgreSQL levantan en `keycloak` namespace.
-- El job `keycloak-configcli` funciona para crear `demo` si no existe.
+# ❌ Incorrecto  
+image:
+  registry: bitnami
+```
 
-Limitación actual (consciente):
+### ArgoCD "another operation is already in progress"
 
-- El Job no reconcilia cambios finos de `demo-realm.json` cuando el realm ya existe.
+**Síntoma**: Application sincroniza pero queda bloqueada; new syncs fallan.
+
+**Causa**: Operación fantasma (job/pod que falló pero el estado quedó en Running).
+
+**Solución**:
+
+```bash
+# Opción 1: Limpiar operación (conserva recursos)
+kubectl -n argocd patch application keycloak --type merge \
+  -p '{"operation": null}'
+
+# Opción 2: Recrear app (más agresivo)
+kubectl -n argocd delete application keycloak --cascade=orphan
+kubectl apply -f manifests/apps/keycloak/base/helmrelease.yaml
+```
+
+### Keycloak no se sincroniza (stuck en Helm hook)
+
+**Síntoma**: keycloakConfigCli job en `ImagePullBackOff` o `CrashLoopBackOff`.
+
+**Causa**: Hook PostSync fallando (probablemente la imagen del configcli).
+
+**Solución**:
+
+```bash
+# Ver logs del job
+kubectl -n keycloak logs job/keycloak-keycloak-config-cli --all-containers=true
+
+# Limpiar job viejo
+kubectl -n keycloak delete job keycloak-keycloak-config-cli
+
+# Forzar nuevo sync en ArgoCD
+argocd app sync apps-keycloak --force
+```
+
+### PostgreSQL no está inicializando
+
+**Síntoma**: PVC Bound pero pod en `Pending` o `CrashLoopBackOff`.
+
+**Causa**: Storage class no disponible o credenciales incorrectas en Secret.
+
+**Solución**:
+
+```bash
+# Ver storage classes disponibles
+kubectl get storageclass
+
+# Ver eventos del pod
+kubectl -n keycloak describe pod keycloak-postgresql-0
+
+# Verificar Secret tiene contraseña
+kubectl -n keycloak get secret keycloak-helm-secrets -o yaml
+```
+
+### SealedSecret no se desencripta
+
+**Síntoma**: SealedSecret aplicado pero Secret no aparece.
+
+**Causa**: Controller parado, clave privada corrupta, o namespace incorrecto.
+
+**Solución**:
+
+```bash
+# Verificar controller está running
+kubectl -n kube-system get deploy sealed-secrets-controller
+
+# Ver logs del controller
+kubectl -n kube-system logs deploy/sealed-secrets-controller
+
+# Recrear sealed secret asegurando namespace correcto
+kubectl -n keycloak create secret generic keycloak-helm-secrets \
+  --from-literal=password='contraseña' \
+  --dry-run=client -o yaml \
+| kubeseal --format yaml > sealed.yaml
+kubectl apply -f sealed.yaml
+```
 
 ## Archivos clave
 
-- App raíz ArgoCD: `revissions/apps-revission.yaml`
-- Overlay apps: `manifests/apps/__overlays/kustomization.yaml`
-- App Keycloak (ArgoCD multi-source): `manifests/apps/keycloak/base/helmrelease.yaml`
-- Values Helm Keycloak: `resources/apps/keycloak/values.yaml`
-- Sealed secret Helm: `resources/apps/keycloak/secrets/keycloak-helm-sealedsecret.yaml`
-- Config realm: `manifests/apps/configcli/base/configmap.yaml`
-- Job bootstrap realm: `manifests/apps/configcli/base/job.yaml`
-- Sealed secret job admin: `manifests/apps/configcli/base/secret.yaml`
+| Archivo | Propósito |
+|---------|-----------|
+| `revissions/apps-revission.yaml` | Application raíz (app-of-apps) |
+| `manifests/apps/__overlays/kustomization.yaml` | Overlay raíz que agrupa apps |
+| `manifests/apps/keycloak/base/helmrelease.yaml` | Application Keycloak (multi-source) |
+| `manifests/apps/keycloak/lab/kustomization.yaml` | Overlay Keycloak lab (despliegue local) |
+| `resources/apps/keycloak/values.yaml` | Configuración Helm (realm, images, env vars) |
+| `resources/apps/keycloak/secrets/keycloak-helm-sealedsecret.yaml` | Credenciales encriptadas (Sealed Secrets) |
+
+## Referencias
+
+- [Bitnami Keycloak Chart](https://github.com/bitnami/charts/tree/main/bitnami/keycloak)
+- [Sealed Secrets](https://github.com/bitnami-labs/sealed-secrets)
+- [ArgoCD Documentation](https://argo-cd.readthedocs.io/)
+- [Keycloak Admin REST API](https://www.keycloak.org/docs/latest/server_admin/#_admin_rest_api)
