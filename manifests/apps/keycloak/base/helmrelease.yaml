@@ -11,7 +11,7 @@ spec:
     # Source 1: Bitnami Keycloak Helm Chart
     - repoURL: https://charts.bitnami.com/bitnami
       chart: keycloak
-      targetRevision: "25.x.x"
+      targetRevision: "25.2.0"
       helm:
         releaseName: keycloak
         valueFiles:
