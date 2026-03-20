@@ -17,17 +17,12 @@ spec:
         valueFiles:
           - $values/resources/apps/keycloak/values.yaml
     
-    # Source 2: ConfigCLI Job and other manifests
-    - repoURL: https://github.com/GivenCloud/Proyecto-Keycloak.git
-      path: manifests/apps/keycloak
-      targetRevision: main
-    
-    # Source 3: Sealed secrets and extra manifests from resources
+    # Source 2: Keycloak Helm secrets from resources
     - repoURL: https://github.com/GivenCloud/Proyecto-Keycloak.git
       path: resources/apps/keycloak/secrets
       targetRevision: main
 
-    # Source 4: Values reference
+    # Source 3: Values reference
     - repoURL: https://github.com/GivenCloud/Proyecto-Keycloak.git
       targetRevision: main
       ref: values

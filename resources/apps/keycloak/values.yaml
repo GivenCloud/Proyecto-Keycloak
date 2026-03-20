@@ -22,14 +22,6 @@ service:
   targetPort: 8080
   annotations: {}
 
-# Ingress configuration (optional, uncomment if needed)
-# ingress:
-#   enabled: true
-#   ingressClassName: nginx
-#   hostname: keycloak.example.com
-#   tls: true
-#   certManager: true
-
 # PostgreSQL backend (recommended for production)
 postgresql:
   enabled: true
@@ -71,18 +63,94 @@ keycloak:
       value: "edge"
     - name: KC_HOSTNAME
       value: "keycloak.local"
-    - name: KEYCLOAK_EXTRA_ARGS
-      value: "--import-realm"
 
-  # Mount ConfigCLI scripts
-  extraVolumes:
-    - name: realm-config
-      configMap:
-        name: keycloak-realm-config
-  
-  extraVolumeMounts:
-    - name: realm-config
-      mountPath: /opt/keycloak/data/import
+# Built-in keycloak-config-cli job managed by the Bitnami chart
+keycloakConfigCli:
+  enabled: true
+  configuration:
+    demo-realm.json: |
+      {
+        "realm": "demo",
+        "displayName": "Demo Realm",
+        "enabled": true,
+        "sslRequired": "external",
+        "loginTheme": "keycloak",
+        "accountTheme": "keycloak",
+        "adminTheme": "keycloak",
+        "emailTheme": "keycloak",
+        "defaultRoles": [
+          "user",
+          "offline_access"
+        ],
+        "roles": {
+          "realm": [
+            {
+              "name": "admin",
+              "description": "Administrator role"
+            },
+            {
+              "name": "user",
+              "description": "Standard user role"
+            },
+            {
+              "name": "manager",
+              "description": "Manager role"
+            }
+          ],
+          "client": {
+            "demo-app": [
+              {
+                "name": "read",
+                "description": "Read access"
+              },
+              {
+                "name": "write",
+                "description": "Write access"
+              },
+              {
+                "name": "delete",
+                "description": "Delete access"
+              }
+            ]
+          }
+        },
+        "clientScopes": [
+          {
+            "name": "demo-scope",
+            "description": "Client scope for demo-app",
+            "protocol": "openid-connect",
+            "attributes": {
+              "include.in.token.scope": "true",
+              "display.on.consent.screen": "false"
+            }
+          }
+        ],
+        "clients": [
+          {
+            "clientId": "demo-app",
+            "name": "Demo Application",
+            "enabled": true,
+            "publicClient": false,
+            "clientAuthenticatorType": "client-secret",
+            "secret": "demo-app-secret",
+            "redirectUris": [
+              "http://localhost:3000/*",
+              "http://localhost:8080/*"
+            ],
+            "webOrigins": [
+              "http://localhost:3000",
+              "http://localhost:8080"
+            ],
+            "defaultClientScopes": [
+              "profile",
+              "email",
+              "roles",
+              "web-origins",
+              "demo-scope"
+            ]
+          }
+        ]
+      }
 
 # Resource limits
 resources:
