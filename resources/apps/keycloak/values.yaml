@@ -67,6 +67,10 @@ keycloak:
 # Built-in keycloak-config-cli job managed by the Bitnami chart
 keycloakConfigCli:
   enabled: true
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/keycloak-config-cli
+    tag: 6.4.0-debian-12-r11
   configuration:
     demo-realm.json: |
       {
